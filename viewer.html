@@ -3,6 +3,7 @@
 <head>
   <title>rpminspect report viewer</title>
   <meta charset="utf-8">
+
   <style>
     .flexgap {
         display: flex;
@@ -19,6 +20,16 @@
     }
     .legend span,label { padding: 5px; }
 
+    /* diagnostics expander */
+    #diagnostics {
+        padding: 1ex;
+        margin: 3ex;
+        background-color: #F2F2F2;
+        box-shadow: 2px 2px 2px lightgrey;
+    }
+    #diagnostics summary { padding: 0.5em; }
+    #diagnostics .diagnostics-check { margin-top: 1em; }
+
     /* inspection summary flex table */
     #summary {
         gap: 2px;
@@ -27,27 +38,19 @@
         flex-wrap: wrap;
     }
     .summary-result {
-        width: 14ex;
-        padding: 10px 2px;
-        text-align: center;
+        width: 15ex; /* needs to fit "pathmigration" */
+        padding: 12px 4px;
+        color: black;
+        text-decoration: none;
         /* define the border here already, to maintain the layout */
-        border-width: 2px;
+        border-width: 1px;
         border-style: solid;
-        border-color: white;
+        border-color: black;
     }
     .summary-result.selected {
+        padding: 10px 2px;
         border-color: blue;
-    }
-
-    details {
-    padding: 1ex;
-    margin: 3ex;
-    background-color: #F2F2F2;
-    box-shadow: 2px 2px 2px lightgrey;
-    }
-    summary {
-        padding: 0.5em;
-        margin-bottom: 0.5ex;
+        border-width: 3px;
     }
 
     .filter { margin-bottom: 2em; }
@@ -60,18 +63,17 @@
     }
 
     .result {
-        min-width: 8ex; /* needs to fit "VERIFY" */
+        min-width: 9ex; /* needs to fit "VERIFY" */
         padding: 5px;
         text-align: center;
         margin: 2px 0;
     }
-    .result-OK { background-color: #C7FFD5; }
-    .result-INFO { background-color: #C7FFFF; }
-    .result-VERIFY { background-color: #FFF1C7; }
-    .result-BAD { background-color: #FFC7C7; }
-    .result-DIAGNOSTICS { background-color: lightblue; }
+    .result-OK { background-color: #E8FFE8; }
+    .result-INFO { background-color: lightblue; }
+    .result-VERIFY { background-color: darkorange; font-weight: bold; }
+    .result-BAD { background-color: #FF4D4D; font-weight: bold; }
 
-    .details {
+    .verbatim {
         white-space: pre-wrap;
         background-color: #e0e0e0;
         font-size: small;
@@ -90,11 +92,11 @@
         <span class="result-INFO">INFO</span>
         <span class="result-VERIFY">VERIFY</span>
         <span class="result-BAD">BAD</span>
-        <span class="result-DIAGNOSTICS">DIAG</span>
     </div>
   </header>
 
   <main>
+    <details id="diagnostics"></details>
     <div id="summary" class="flexgap"></div>
     <div id="details"></div>
   </main>
@@ -104,12 +106,12 @@
 
 import {html, render } from 'https://cdn.jsdelivr.net/gh/lit/dist@2/core/lit-core.min.js';
 
-const RESULTS = ['OK', 'INFO', 'VERIFY', 'BAD', 'DIAGNOSTICS'];
+const RESULTS = ['OK', 'INFO', 'VERIFY', 'BAD'];
 
 const getFilters = () => RESULTS.filter(v => document.getElementById('show_' + v)?.checked);
 
 // global state
-let selectedInspection = 'diagnostics';
+let selectedInspection = 'license';
 let resultFilter = null;
 
 // Compute an overall result for inspections
@@ -121,14 +123,28 @@ function getInspectionResults(report) {
 
     for (const inspection in report) {
         const seen = new Set()
-        report[inspection].forEach(test => seen.add(test.result));
+        report[inspection].forEach(check => seen.add(check.result));
         const seen_sorted = RESULTS.filter(r => seen.has(r));
         inspections.push({name: inspection, results: seen_sorted, result: seen_sorted[seen_sorted.length - 1]});
     }
     return inspections;
 }
 
-function renderInspection(testname, checks, resultTypes) {
+function renderDiagnostics(checks) {
+    const renderedChecks = [html`<summary>Diagnostics</summary>`];
+
+    for (const check of checks) {
+        renderedChecks.push(html`
+            <div class="diagnostics-check">${check.message}</span>
+            ${check.details && html`<div class="verbatim">${check.details}</div>`}
+            `
+        );
+    }
+
+    return renderedChecks;
+}
+
+function renderInspection(name, checks, resultTypes) {
     if (checks.length == 0)
         return null;
 
@@ -142,12 +158,12 @@ function renderInspection(testname, checks, resultTypes) {
 
         renderedChecks.push(html`
             <div class="flexgap">
-              <span class="result result-${check.result}">${check.result == 'DIAGNOSTICS' ? 'DIAG' : check.result}</span>
+              <span class="result result-${check.result}">${check.result}</span>
               <span>${check.message}</span>
               ${waiver}
             </div>
             ${remedy}
-            ${check.details && html`<div class="details">${check.details}</div>`}
+            ${check.details && html`<div class="verbatim">${check.details}</div>`}
             `
         );
     }
@@ -160,7 +176,7 @@ function renderInspection(testname, checks, resultTypes) {
             resultFilter.add(r);
         else
             resultFilter.delete(r);
-        render(renderInspection(testname, checks, resultTypes), document.getElementById('details'));
+        render(renderInspection(name, checks, resultTypes), document.getElementById('details'));
     };
 
     let filter = null;
@@ -175,14 +191,14 @@ function renderInspection(testname, checks, resultTypes) {
     }
 
     return html`
-        <h2>${testname}</h2>
+        <h2>${name}</h2>
         ${filter}
         ${renderedChecks}`;
 }
 
 /* data structure looks like this:
    {
-     "testname": [
+     "inspection-name": [
        {
          "result": "INFO",
          "waiver authorization": "Not Waivable",
@@ -207,6 +223,9 @@ function renderResults(report) {
     let selectedResultTypes = null;
 
     inspections.forEach(inspection => {
+        if (inspection.name == 'diagnostics')
+            return render(renderDiagnostics(report.diagnostics), document.getElementById('diagnostics'));
+
         summary.push(html`<a class="summary-result result-${inspection.result} ${selectedInspection == inspection.name ? 'selected' : ''}"
                              @click=${onInspectionClicked} href="#">${inspection.name}</a>`);
         if (inspection.name == selectedInspection)
